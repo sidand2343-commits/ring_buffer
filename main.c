@@ -1,74 +1,94 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include "ring_buffer.h"
 
-// Вспомогательная функция для красивого вывода логического содержимого буфера
-void print_buffer(const RingBuffer* buf) {
-    printf("  Logical contents: [ ");
-    for (size_t i = 0; i < buf->size; i++) {
-        size_t idx = (buf->head + i) % buf->capacity;
-        printf("%d ", buf->data[idx]);
+void print_buffer_state(const RingBuffer* buf) {
+    printf("  [State] Size: %zu / %zu | Empty: %s | Full: %s\n",
+           rb_size(buf), rb_capacity(buf),
+           rb_is_empty(buf) ? "Yes" : "No ",
+           rb_is_full(buf)  ? "Yes" : "No ");
+}
+
+// Print contents without destroying the buffer (using a temporary array)
+void print_buffer_contents(RingBuffer* buf) {
+    size_t size = rb_size(buf);
+    if (size == 0) {
+        printf("  [Contents] <empty>\n");
+        return;
     }
-    printf("]\n");
+
+    int* temp = (int*)malloc(size * sizeof(int));
+    if (!temp) return;
+
+    printf("  [Contents] ");
+    for (size_t i = 0; i < size; i++) {
+        rb_pop(buf, &temp[i]);
+        printf("%d ", temp[i]);
+    }
+    printf("\n");
+
+    // Put the elements back
+    for (size_t i = 0; i < size; i++) {
+        rb_push(buf, temp[i]);
+    }
+    free(temp);
 }
 
 int main(void) {
     RingBuffer* buf = NULL;
-    int val = 0;
+    RB_Error err;
+    int val;
 
-    printf("--- Test 1: Creation and Edge Cases (Empty) ---\n");
-    if (rb_create(5, &buf) != RB_OK) return 1;
-    printf("Created buffer with capacity %zu\n", rb_capacity(buf));
+    printf("=== 1. Creating a buffer with capacity 5 ===\n");
+    err = rb_create(5, &buf);
+    if (err != RB_OK) return 1;
+    print_buffer_state(buf);
 
-    // Попытка извлечь из пустого
-    if (rb_pop(buf, &val) == RB_ERR_EMPTY) {
-        printf("  [OK] Pop from empty buffer correctly returned ERR_EMPTY\n");
+    printf("\n=== 2. Filling to the limit (edge case: FULL) ===\n");
+    for (int i = 1; i <= 5; i++) {
+        rb_push(buf, i * 10);
     }
-    // Попытка посмотреть в пустом
-    if (rb_peek(buf, &val) == RB_ERR_EMPTY) {
-        printf("  [OK] Peek into empty buffer correctly returned ERR_EMPTY\n");
+    print_buffer_state(buf);
+    print_buffer_contents(buf);
+
+    printf("\n=== 3. Attempting to push into a full buffer ===\n");
+    err = rb_push(buf, 999);
+    printf("  Push result: %d (Expected %d - RB_ERR_FULL)\n", err, RB_ERR_FULL);
+    printf("  Data was not corrupted:\n");
+    print_buffer_contents(buf);
+
+    printf("\n=== 4. Extracting half of the elements ===\n");
+    for (int i = 0; i < 3; i++) {
+        rb_pop(buf, &val);
+        printf("  Popped: %d\n", val);
     }
+    print_buffer_state(buf);
 
-    printf("\n--- Test 2: Filling and Edge Cases (Full) ---\n");
-    for (int i = 1; i <= 5; i++) rb_push(buf, i * 10);
-    printf("Filled buffer with 5 elements.\n");
-    print_buffer(buf);
-
-    // Попытка добавить в полный
-    if (rb_push(buf, 999) == RB_ERR_FULL) {
-        printf("  [OK] Push to full buffer correctly returned ERR_FULL (data not corrupted)\n");
-    }
-    print_buffer(buf);
-
-    printf("\n--- Test 3: Wrap-around (Transition through the end) ---\n");
-    // Извлекаем 2 элемента (голова сдвигается)
-    rb_pop(buf, &val); printf("Popped: %d\n", val);
-    rb_pop(buf, &val); printf("Popped: %d\n", val);
-
-    // Добавляем ещё 2 (хвост упрется в конец массива и перейдет в начало)
+    printf("\n=== 5. Adding new elements (Position wraps around the end of the array) ===\n");
+    printf("  (head and tail are currently at the end, new elements will go to the beginning)\n");
     rb_push(buf, 60);
     rb_push(buf, 70);
-    printf("After popping 2 and pushing 2 more (wrap-around occurred):\n");
-    print_buffer(buf); // Ожидается: 30 40 50 60 70
+    rb_push(buf, 80);
+    print_buffer_state(buf);
+    print_buffer_contents(buf);
 
-    printf("\n--- Test 4: Single Element and Repeated Deletion ---\n");
-    // Опустошаем буфер почти полностью
-    while (rb_size(buf) > 1) {
+    printf("\n=== 6. Peeking at the first element ===\n");
+    rb_peek(buf, &val);
+    printf("  Peeked: %d (should be 40, buffer unchanged)\n", val);
+    print_buffer_contents(buf);
+
+    printf("\n=== 7. Emptying the buffer (edge case: EMPTY) ===\n");
+    while (!rb_is_empty(buf)) {
         rb_pop(buf, &val);
     }
-    printf("Left 1 element. Peek shows: ");
-    rb_peek(buf, &val);
-    printf("%d\n", val);
+    print_buffer_state(buf);
 
-    rb_pop(buf, &val);
-    printf("Popped last element: %d. Is empty? %s\n", val, rb_is_empty(buf) ? "Yes" : "No");
-
-    // Повторное удаление из уже пустого
-    if (rb_pop(buf, &val) == RB_ERR_EMPTY) {
-        printf("  [OK] Repeated deletion from empty buffer handled correctly\n");
-    }
+    printf("\n=== 8. Attempting to pop from an empty buffer ===\n");
+    err = rb_pop(buf, &val);
+    printf("  Pop result: %d (Expected %d - RB_ERR_EMPTY)\n", err, RB_ERR_EMPTY);
 
     rb_destroy(buf);
-    printf("\nBuffer destroyed. Memory freed.\n");
+    printf("\n=== Memory successfully freed. Exiting. ===\n");
 
     return 0;
 }
